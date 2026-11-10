@@ -154,6 +154,10 @@ textarea.inp{font-family:'JetBrains Mono',monospace;font-size:12px;min-height:12
 .w .g{font-size:11.5px;color:var(--lamp);font-weight:600;min-height:14px}
 .w .e{font-size:15.5px}
 .trf{margin-top:6px;padding-top:8px;border-top:1px dashed var(--line);font-size:13.5px;color:var(--mute)}
+.tr-screen{text-align:center;padding:28px 0}
+.tr-big{font-family:'JetBrains Mono',monospace;font-size:44px;color:var(--lamp);margin:16px 0 4px}
+.tr-ph{font-size:18px;color:var(--text);min-height:54px;margin-bottom:22px}
+.tr-btn{width:100%;padding:30px 16px;font-size:24px;border-radius:22px}
 .corr{padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.5}
 .corr:last-child{border-bottom:0}
 .corr .bad{color:var(--coral);text-decoration:line-through}
@@ -316,7 +320,7 @@ const BASE_DLG=[
 ];
 
 const ACC_LABEL={US:"🇺🇸 americano",UK:"🇬🇧 britânico",AU:"🇦🇺 australiano"};
-const LANG={US:"en-US",UK:"en-GB",AU:"en-AU"};
+const LANG={US:"en-US",UK:"en-GB",AU:"en-AU",PT:"pt-BR"};
 const INT=[0,1,2,4,8,16,32];
 const RANKS=[[0,"Gatinho"],[120,"Gato de telhado"],[350,"Gato de rua"],[800,"Gato esperto"],[1600,"Gato mestre"],[3200,"Lenda da noite"]];
 const BLOCKS=[
@@ -442,7 +446,7 @@ const vq=v=>(/natural|neural|enhanced|premium/i.test(v.name)?3:0)+(/google/i.tes
 function voiceFor(acc,i){
   const lang=LANG[acc]||"en-US";
   let l=VOICES.filter(v=>v.lang.replace("_","-")===lang);
-  if(!l.length)l=VOICES.filter(v=>/^en/i.test(v.lang));
+  if(!l.length)l=VOICES.filter(v=>(acc==="PT"?/^pt/i:/^en/i).test(v.lang));
   l.sort((a,b)=>vq(b)-vq(a));
   return l.length?l[i%l.length]:null;
 }
@@ -626,6 +630,7 @@ function home(){
     <button class="mode" data-act="library"><div>📚</div><b>Biblioteca</b><span>${c.chunks.length} frases · ${c.dec.length} falas rápidas</span></button>
     <button class="mode" data-act="method"><div>🧠</div><b>O método</b><span>Por que isso funciona para adultos</span></button>
   </div>
+  <button class="mode" style="width:100%;margin-bottom:12px;border-color:var(--lampd)" data-act="transit"><div>🚗</div><b>Modo Trânsito</b><span>Só áudio, sem olhar. Para o carro parado, o ônibus ou a caminhada.</span></button>
   <button class="mode" style="width:100%;margin-bottom:12px;border-color:var(--lampd)" data-act="guided"><div>🐈‍⬛</div><b>Conversa guiada</b><span>Converse com o Gato escolhendo respostas. Sem limite de uso.</span></button>
   ${sampleFn?`<button class="mode" style="width:100%;margin-bottom:12px;border-color:var(--lampd)" data-act="chat"><div>🐈‍⬛</div><b>Conversa livre com o Gato</b><span>Escreva o que quiser; correções no final (usa seu limite do Claude)</span></button>`:""}
   <button class="mode" style="width:100%;margin-bottom:12px" data-act="progress"><div>📈</div><b>Meu progresso</b><span>Últimos 7 dias, pontos fracos e resumo para o Claude</span></button>
@@ -1327,6 +1332,154 @@ function gReply(text){
 }
 function gExit(){if(g&&g.i>0&&g.i<g.s.turns.length)ask("Sair da conversa guiada?",()=>{stopAll();gSetup();});else{stopAll();gSetup();}}
 /* ============================================================
+   MODO TRÂNSITO: só áudio, sem precisar tocar na tela
+   ============================================================ */
+let T=null,wakeLock=null,keepAudio=null;
+const tSleep=ms=>new Promise(r=>setTimeout(r,ms));
+function tSilentWav(){
+  const n=8000,b=new ArrayBuffer(44+n),v=new DataView(b);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  w(0,"RIFF");v.setUint32(4,36+n,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,8000,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,"data");v.setUint32(40,n,true);
+  for(let i=0;i<n;i++)v.setUint8(44+i,128);
+  return URL.createObjectURL(new Blob([b],{type:"audio/wav"}));
+}
+async function tKeepAwake(on){
+  try{
+    if(on){
+      if(navigator.wakeLock&&!wakeLock){wakeLock=await navigator.wakeLock.request("screen");wakeLock.addEventListener("release",()=>{wakeLock=null;});}
+      if(!keepAudio){keepAudio=new Audio(tSilentWav());keepAudio.loop=true;keepAudio.volume=0.01;keepAudio.play().catch(()=>{});}
+    }else{
+      if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null;}
+      if(keepAudio){keepAudio.pause();keepAudio=null;}
+    }
+  }catch(e){}
+}
+function tSetup(){
+  clearTimers();stopAll();S=null;chat=null;g=null;T=null;tKeepAwake(false);
+  app.innerHTML=`<div class="top"><button class="x" data-act="home" aria-label="Voltar">✕</button><div class="blockname" style="margin:0"><b>🚗 Modo Trânsito</b></div></div>
+   <div class="card"><h2>Só áudio, sem olhar</h2>
+   <p>O app fala e você responde em voz alta, sem tocar em nada. Para cada frase: inglês, o significado em português, inglês de novo mais devagar com uma pausa para você repetir, e um exemplo. Depois vêm falas rápidas e diálogos.</p>
+   <div class="fb bad"><b>Segurança primeiro.</b> Comece o áudio com o carro parado e o celular no suporte. Enquanto dirige, não toque e não olhe para a tela. Se precisar pausar, espere parar.</div>
+   <h3 class="mt">Duração</h3><div class="chips">${[10,20,30].map(m=>`<button class="chip ${(db.settings.tMin||20)===m?"on":""}" data-act="tMin" data-v="${m}">${m} min</button>`).join("")}</div>
+   <button class="btn mt" data-act="tStart">▶ Começar</button>
+   <p class="mute small">Ele prioriza as frases que você mais errou. Teste primeiro parado: mude de app ou bloqueie a tela e veja se o áudio continua no seu iPhone. Se parar, deixe a tela ligada, com brilho baixo.</p></div>`;
+}
+function tPick(min){
+  const c=content(),tt=today();
+  const wk=x=>{const r=db.cards[x.en];return r?(r.lapses||0)*2+(r.due<=tt?3:0)+Math.random():(Math.random()*2);};
+  const nCh=Math.round(min*2.1),nDc=Math.round(min*0.8),nDl=Math.max(1,Math.round(min/8));
+  const ch=[...c.chunks].sort((a,b)=>wk(b)-wk(a)).slice(0,nCh);
+  const dcw=x=>{const r=db.dec[x.said];return r?(r.lapses||0)*2+Math.random():Math.random()*2;};
+  const dc=[...c.dec].sort((a,b)=>dcw(b)-dcw(a)).slice(0,nDc);
+  const dl=shuffle(c.dlg).slice(0,nDl);
+  return {ch:shuffle(ch),dc:shuffle(dc),dl:dl};
+}
+async function tWait(ms){
+  ms=ms/(window.__tq||1);
+  const end=Date.now()+ms;
+  while(Date.now()<end){
+    if(!T||T.stop)return false;
+    while(T.paused){if(!T||T.stop)return false;await tSleep(250);}
+    await tSleep(120);
+  }
+  return !!T&&!T.stop;
+}
+async function tSay(text,o){
+  if(!T||T.stop)return false;
+  while(T.paused){if(!T||T.stop)return false;await tSleep(250);}
+  await say(text,o);
+  return !!T&&!T.stop;
+}
+function tPhase(txt){if(T)T.ph=txt;const e=$("#trPh");if(e)e.textContent=txt;}
+async function tRun(){
+  const a=T,sp=Math.min(1.05,db.speed||0.9),pt={accent:"PT",rate:1.0};
+  const pk=tPick(a.min);
+  const acc=()=>shuffle(["US","UK","AU"])[0];
+  try{
+    if(!await tSay("Vamos começar. Ouça e repita em voz alta.",pt))return;
+    for(let i=0;i<pk.ch.length;i++){
+      const x=pk.ch[i];
+      if(i%6===0&&i>0&&!await tSay("Mais frases.",pt))return;
+      tPhase("Frases · "+(i+1)+"/"+pk.ch.length);
+      if(!await tSay(x.en,{accent:"US",rate:sp}))return;
+      if(!await tWait(1800))return;
+      if(!await tSay(x.pt,pt))return;
+      if(!await tWait(900))return;
+      tPhase("Repita em voz alta");
+      if(!await tSay(x.en,{accent:"US",rate:0.78}))return;
+      if(!await tWait(3500))return;
+      if(!await tSay(x.ex,{accent:"US",rate:sp}))return;
+      if(!await tWait(1200))return;
+      if(!await tSay(x.exPt,pt))return;
+      if(!await tWait(900))return;
+      if(a.stop)return;
+    }
+    if(!await tSay("Agora, falas rápidas. Ouça e tente entender.",pt))return;
+    for(let i=0;i<pk.dc.length;i++){
+      const x=pk.dc[i];
+      tPhase("Fala rápida · "+(i+1)+"/"+pk.dc.length);
+      if(!await tSay(x.said,{accent:acc(),rate:sp}))return;
+      if(!await tWait(3500))return;
+      tPhase("Forma completa");
+      if(!await tSay(x.full,{accent:"US",rate:0.8}))return;
+      if(!await tWait(1000))return;
+      if(!await tSay(x.pt,pt))return;
+      if(!await tWait(900))return;
+    }
+    if(pk.dl.length&&!await tSay("Agora, um diálogo. Tente entender sem ler.",pt))return;
+    for(let i=0;i<pk.dl.length;i++){
+      const d=pk.dl[i];
+      tPhase("Diálogo · "+d.title);
+      for(const l of d.lines){
+        if(!await tSay(l.text,{accent:d.accent,rate:sp,voice:l.who==="B"?1:0,pitch:l.who==="B"?0.85:1}))return;
+        if(!await tWait(350))return;
+      }
+      if(!await tWait(2500))return;
+      if(!await tSay("Mais uma vez, mais devagar.",pt))return;
+      for(const l of d.lines){
+        if(!await tSay(l.text,{accent:d.accent,rate:0.8,voice:l.who==="B"?1:0,pitch:l.who==="B"?0.85:1}))return;
+        if(!await tWait(350))return;
+      }
+      if(!await tWait(1500))return;
+    }
+    await tSay("Pronto. Bom treino, e boa viagem.",pt);
+  }finally{
+    if(T===a&&!a.stop)tFinish(true);
+  }
+}
+function tFinish(done){
+  const a=T;if(!a||a.fin)return;a.fin=true;a.stop=true;
+  stopAll();tKeepAwake(false);
+  const secs=Math.min(3600,Math.round((Date.now()-a.t0-a.pausedMs)/1000));
+  const d=today();db.secs[d]=(db.secs[d]||0)+secs;addXP(Math.max(5,Math.round(secs/60)*2));
+  T=null;
+  app.innerHTML=`<div class="top"><button class="x" data-act="home" aria-label="Voltar">✕</button><div class="blockname" style="margin:0"><b>🚗 Modo Trânsito</b></div></div><div class="card center"><h2>${done?"Treino concluído 🎉":"Treino encerrado"}</h2><p>Você treinou ${Math.floor(secs/60)} min e ${secs%60} s. Isso já conta no seu tempo de hoje.</p><div class="row"><button class="btn ghost" data-act="tSetup">De novo</button><button class="btn" data-act="home">Início</button></div></div>`;
+}
+function tStart(){
+  const min=db.settings.tMin||20;
+  unlockAudio();tKeepAwake(true);
+  T={min:min,t0:Date.now(),paused:false,stop:false,ph:"",pausedMs:0,pAt:0};
+  const tick=()=>{
+    if(!T||T.stop)return;
+    const el=Math.max(0,Math.round((Date.now()-T.t0-T.pausedMs)/1000));
+    const e=$("#trClock");if(e)e.textContent=fmtClock(el);
+    setTimeout(tick,1000);
+  };
+  app.innerHTML=`<div class="tr-screen"><div class="mute small">🚗 Modo Trânsito</div><div class="tr-big" id="trClock">00:00</div><div class="tr-ph" id="trPh">Começando…</div>
+   <button class="btn tr-btn" data-act="tPause" id="trBtn">⏸ Pausar</button>
+   <button class="btn ghost mt" data-act="tEnd">Encerrar</button>
+   <p class="mute small">Com o carro em movimento, não toque. O áudio continua sozinho.</p></div>`;
+  tick();
+  tRun();
+}
+function tPause(){
+  if(!T)return;
+  T.paused=!T.paused;
+  if(T.paused){T.pAt=Date.now();stopAll();}else{T.pausedMs+=Date.now()-T.pAt;}
+  const b=$("#trBtn");if(b)b.textContent=T.paused?"▶ Continuar":"⏸ Pausar";
+}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&T&&!T.stop)tKeepAwake(true);});
+/* ============================================================
    PROGRESSO + RESUMO PARA O CLAUDE
    ============================================================ */
 const WD=["D","S","T","Q","Q","S","S"];
@@ -1401,7 +1554,7 @@ function copySummary(){
    EVENTOS
    ============================================================ */
 const acts={
-  home:()=>home(),progress:()=>progress(),copySummary:()=>copySummary(),chat:()=>chatSetup(),chatSetup:()=>chatSetup(),chatCfg:el=>{chatCfg[el.dataset.k]=el.dataset.v;chatSetup();},chatStart:()=>chatStart(),chatRetry0:()=>{if(chat){unlockAudio();chatAsk(null);}},chatSend:()=>chatSend(),chatDunno:()=>chatDunno(),chatEnd:()=>chatEnd(),chatExit:()=>chatExit(),chatStop:()=>chatStop(),chatSay:el=>{const m=chat&&chat.msgs[+el.dataset.k];if(m)say(m.text,{accent:db.settings.accent,rate:+el.dataset.r||chatLevel().r});},chatTr:el=>chatTr(+el.dataset.k),guided:()=>gSetup(),gSetup:()=>gSetup(),gStart:()=>gStart(),gExit:()=>gExit(),gCfg:el=>{const k=el.dataset.k,v=el.dataset.v;gCfg[k]=k==="sc"?v:v==="1";gSetup();},gSay:el=>{const x=g&&g.s.turns[+el.dataset.k];if(x)say(x.en,{accent:g.s.acc,rate:+el.dataset.r||Math.min(1,db.speed||0.9)});},gShow:el=>{const m=g&&g.msgs[+el.dataset.k];if(m){m.shown=true;gDraw();}},gHear:el=>{const r=g&&g.s.turns[g.i]&&g.s.turns[g.i].r[+el.dataset.k];if(r)say(r,{accent:g.s.acc,rate:0.95,voice:1});},gPick:el=>{const r=g&&g.s.turns[g.i]&&g.s.turns[g.i].r[+el.dataset.k];if(r){unlockAudio();gReply(r);}},gSend:()=>{const i=$("#gIn");const v=i&&i.value.trim();if(v){unlockAudio();gReply(v);}},gToggle:()=>{g.gl=!g.gl;gDraw();},chatShow:el=>{const m=chat&&chat.msgs[+el.dataset.k];if(m){m.shown=true;chatDraw();}},chatAdd:el=>{if(chatAddPhrase(+el.dataset.k)){save();el.textContent="✓ Adicionada";el.disabled=true;el.classList.add("ghost");}},chatAddAll:()=>{chat.fb.forEach((f,i)=>chatAddPhrase(i));save();chatFbDraw();},askYes:()=>{const f=askCb;askCb=null;const m=$("#modal");if(m)m.remove();if(f)f();},askNo:()=>{askCb=null;const m=$("#modal");if(m)m.remove();},startSession:()=>startSession(),exitSession:()=>exitSession(),
+  home:()=>home(),progress:()=>progress(),copySummary:()=>copySummary(),chat:()=>chatSetup(),chatSetup:()=>chatSetup(),chatCfg:el=>{chatCfg[el.dataset.k]=el.dataset.v;chatSetup();},chatStart:()=>chatStart(),chatRetry0:()=>{if(chat){unlockAudio();chatAsk(null);}},chatSend:()=>chatSend(),chatDunno:()=>chatDunno(),chatEnd:()=>chatEnd(),chatExit:()=>chatExit(),chatStop:()=>chatStop(),chatSay:el=>{const m=chat&&chat.msgs[+el.dataset.k];if(m)say(m.text,{accent:db.settings.accent,rate:+el.dataset.r||chatLevel().r});},chatTr:el=>chatTr(+el.dataset.k),transit:()=>tSetup(),tSetup:()=>tSetup(),tStart:()=>tStart(),tPause:()=>tPause(),tEnd:()=>tFinish(false),tMin:el=>{db.settings.tMin=+el.dataset.v;save();tSetup();},guided:()=>gSetup(),gSetup:()=>gSetup(),gStart:()=>gStart(),gExit:()=>gExit(),gCfg:el=>{const k=el.dataset.k,v=el.dataset.v;gCfg[k]=k==="sc"?v:v==="1";gSetup();},gSay:el=>{const x=g&&g.s.turns[+el.dataset.k];if(x)say(x.en,{accent:g.s.acc,rate:+el.dataset.r||Math.min(1,db.speed||0.9)});},gShow:el=>{const m=g&&g.msgs[+el.dataset.k];if(m){m.shown=true;gDraw();}},gHear:el=>{const r=g&&g.s.turns[g.i]&&g.s.turns[g.i].r[+el.dataset.k];if(r)say(r,{accent:g.s.acc,rate:0.95,voice:1});},gPick:el=>{const r=g&&g.s.turns[g.i]&&g.s.turns[g.i].r[+el.dataset.k];if(r){unlockAudio();gReply(r);}},gSend:()=>{const i=$("#gIn");const v=i&&i.value.trim();if(v){unlockAudio();gReply(v);}},gToggle:()=>{g.gl=!g.gl;gDraw();},chatShow:el=>{const m=chat&&chat.msgs[+el.dataset.k];if(m){m.shown=true;chatDraw();}},chatAdd:el=>{if(chatAddPhrase(+el.dataset.k)){save();el.textContent="✓ Adicionada";el.disabled=true;el.classList.add("ghost");}},chatAddAll:()=>{chat.fb.forEach((f,i)=>chatAddPhrase(i));save();chatFbDraw();},askYes:()=>{const f=askCb;askCb=null;const m=$("#modal");if(m)m.remove();if(f)f();},askNo:()=>{askCb=null;const m=$("#modal");if(m)m.remove();},startSession:()=>startSession(),exitSession:()=>exitSession(),
   next:()=>finishBlock(),blitz:()=>blitz(),exam:()=>exam(),library:()=>library(),method:()=>method(),
   say:el=>say(el.dataset.t,{rate:+el.dataset.r||1,accent:el.dataset.a||undefined,voice:+el.dataset.v||0,pitch:(+el.dataset.v===1)?0.85:1}),
   setAccent:el=>{db.settings.accent=el.dataset.v;save();home();say("Hey, how's it going?");},
